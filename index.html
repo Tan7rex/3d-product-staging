@@ -271,13 +271,13 @@
         <section class="callout" id="callout-finish" aria-labelledby="callout-finish-title" hidden>
           <h3 id="callout-finish-title">Anisotropic Surface Finish</h3>
           <button type="button" class="callout-close" aria-label="Close">&times;</button>
-          <p>Brushed grain from noise stretched 12:1 along one axis, baked in Cycles to a tangent-space normal
-            map so highlights streak across the surface like machined metal.</p>
+          <p data-live="finish-desc">Native Material Library (.mtl) &mdash; Multi-surface diffuse &amp; roughness
+            parameters assigned directly from the Maya OBJ export.</p>
           <dl>
             <dt>Finish</dt><dd data-live="material">Architectural Multi-Material (Native MTL)</dd>
             <dt>Roughness</dt><dd data-live="roughness">Per material</dd>
             <dt>Metallic</dt><dd data-live="metallic">Per material</dd>
-            <dt>Normal map</dt><dd>2048 &times; 2048, embedded</dd>
+            <dt>Surfaces</dt><dd data-live="surfaces">29 native materials</dd>
           </dl>
         </section>
         <section class="callout" id="callout-base" aria-labelledby="callout-base-title" hidden>
@@ -391,6 +391,13 @@
     // Snapshot of each imported material, taken just before the first metal swatch overwrites them, so
     // "Original MTL" can undo it. (Taken lazily: the model can finish loading before this script runs.)
     let originalMaterials = null;
+    // Surface-finish card copy for the active swatch; the native text matches the markup's initial state.
+    const FINISH_DESCRIPTIONS = {
+      native: 'Native Material Library (.mtl) — Multi-surface diffuse & roughness parameters assigned '
+        + 'directly from the Maya OBJ export.',
+      metal: 'Uniform Metallic PBR Finish — Real-time base colour, metallic and roughness applied across '
+        + 'all 29 surfaces.',
+    };
 
     const actions = {
       camera(btn) {
@@ -413,6 +420,8 @@
           });
           live('material').textContent = btn.dataset.label;
           live('roughness').textContent = live('metallic').textContent = 'Per material';
+          live('finish-desc').textContent = FINISH_DESCRIPTIONS.native;
+          live('surfaces').textContent = `${materials.length} native materials`;
           return;
         }
         originalMaterials ??= materials.map(({ pbrMetallicRoughness: pbr }) => ({
@@ -431,6 +440,8 @@
         live('material').textContent = btn.textContent.trim();
         live('roughness').textContent = roughness.toFixed(2);
         live('metallic').textContent = '1.00';
+        live('finish-desc').textContent = FINISH_DESCRIPTIONS.metal;
+        live('surfaces').textContent = `${materials.length}, unified metal`;
       },
       environment(btn) {
         viewer.environmentImage = btn.dataset.env;
