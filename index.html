@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gold Sphere Viewer</title>
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #121212;
+      color: #e0e0e0;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .container {
+      width: min(900px, calc(100% - 32px));
+      text-align: center;
+    }
+    h1 {
+      font-weight: 500;
+      font-size: 1.4rem;
+      letter-spacing: 0.02em;
+      margin: 0 0 16px;
+    }
+    model-viewer {
+      width: 100%;
+      height: 600px;
+      background: #1a1a1a;
+      border-radius: 12px;
+      --poster-color: transparent;
+    }
+    p {
+      color: #888;
+      font-size: 0.85rem;
+      margin: 12px 0 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Gold Sphere</h1>
+    <model-viewer
+      src="Gold_Sphere_Interactive.glb"
+      alt="Brushed gold sphere"
+      auto-rotate
+      camera-controls
+      shadow-intensity="1.5"
+      exposure="1"
+      environment-image="neutral">
+    </model-viewer>
+    <p>Drag to orbit &middot; scroll to zoom</p>
+  </div>
+</body>
+</html>
