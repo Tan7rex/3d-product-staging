@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gold Sphere Viewer</title>
+  <title>Interior CAD Viewer</title>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
   <style>
     :root {
@@ -234,15 +234,15 @@
 <body>
   <div class="container">
     <header>
-      <h1>Gold Sphere</h1>
+      <h1>Interior CAD Showcase</h1>
       <p>Cycles-baked brushed normal map &middot; real-time PBR in the browser</p>
     </header>
 
     <div>
       <model-viewer
         id="viewer"
-        src="Gold_Sphere_Interactive.glb"
-        alt="Brushed gold sphere"
+        src="Interior_CAD_Interactive.glb"
+        alt="Brushed gold interior CAD model"
         auto-rotate
         camera-controls
         interpolation-decay="120"
@@ -254,15 +254,15 @@
         shadow-intensity="1.5"
         exposure="1"
         environment-image="neutral">
-        <!-- glTF space: Y up, metres; the sphere is centred at (0, 1, 0) with radius 1 and rests on y = 0 -->
+        <!-- glTF space: Y up, metres; the interior spans x +/-0.444, y 0..1.005, z +/-1.0 and rests on y = 0 -->
         <button type="button" class="hotspot" data-visibility-attribute="visible" slot="hotspot-finish"
-                data-position="0.451m 1.551m 0.702m" data-normal="0.451m 0.551m 0.702m"
+                data-position="0.444m 0.7m 0.3m" data-normal="1m 0m 0m"
                 data-callout="callout-finish" aria-expanded="false" aria-controls="callout-finish"
                 aria-label="Anisotropic Surface Finish">
           <span class="hotspot-label" aria-hidden="true">Anisotropic Surface Finish</span>
         </button>
         <button type="button" class="hotspot" data-visibility-attribute="visible" slot="hotspot-base"
-                data-position="0m 0.2m 0.6m" data-normal="0m -0.8m 0.6m"
+                data-position="0.444m 0.1m -0.4m" data-normal="1m 0m 0m"
                 data-callout="callout-base" aria-expanded="false" aria-controls="callout-base"
                 aria-label="Base Seating &amp; Dimensions">
           <span class="hotspot-label" aria-hidden="true">Base Seating &amp; Dimensions</span>
@@ -286,9 +286,9 @@
           <p>Normalised so the longest side is 2&nbsp;m, centred on the turntable axis and seated with its lowest
             point flush on the floor plane (Z&nbsp;=&nbsp;0).</p>
           <dl>
-            <dt>Bounding box</dt><dd>2.00 &times; 2.00 &times; 2.00 m</dd>
-            <dt>Contact</dt><dd>Single point at Z = 0</dd>
-            <dt>Focus target</dt><dd>Mid-height, Z = 1.00 m</dd>
+            <dt>Bounding box</dt><dd>0.89 &times; 2.00 &times; 1.01 m</dd>
+            <dt>Contact</dt><dd>Floor slab flush at Z = 0</dd>
+            <dt>Focus target</dt><dd>Mid-height, Z = 0.50 m</dd>
             <dt>Turntable</dt><dd>360&deg; / 120 frames @ 30 fps</dd>
           </dl>
         </section>
