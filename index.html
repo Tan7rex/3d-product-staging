@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Interior CAD Viewer</title>
+  <title>Architectural Interior Scene</title>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
   <style>
     :root {
@@ -234,7 +234,7 @@
 <body>
   <div class="container">
     <header>
-      <h1>Interior CAD Showcase</h1>
+      <h1>Architectural Interior Scene</h1>
       <p>Cycles-baked brushed normal map &middot; real-time PBR in the browser</p>
     </header>
 
@@ -242,7 +242,7 @@
       <model-viewer
         id="viewer"
         src="Interior_CAD_Interactive.glb"
-        alt="Brushed gold interior CAD model"
+        alt="Architectural interior scene with its native multi-material finish"
         auto-rotate
         camera-controls
         interpolation-decay="120"
@@ -274,9 +274,9 @@
           <p>Brushed grain from noise stretched 12:1 along one axis, baked in Cycles to a tangent-space normal
             map so highlights streak across the surface like machined metal.</p>
           <dl>
-            <dt>Finish</dt><dd data-live="material">Brushed Gold</dd>
-            <dt>Roughness</dt><dd data-live="roughness">0.18</dd>
-            <dt>Metallic</dt><dd>1.00</dd>
+            <dt>Finish</dt><dd data-live="material">Architectural Multi-Material (Native MTL)</dd>
+            <dt>Roughness</dt><dd data-live="roughness">Per material</dd>
+            <dt>Metallic</dt><dd data-live="metallic">Per material</dd>
             <dt>Normal map</dt><dd>2048 &times; 2048, embedded</dd>
           </dl>
         </section>
@@ -309,7 +309,9 @@
       <section>
         <h2>Material</h2>
         <div class="options grid" data-group="material">
-          <button type="button" aria-pressed="true" data-color="1,0.65,0.05" data-rough="0.18">
+          <button type="button" aria-pressed="true" data-original data-label="Architectural Multi-Material (Native MTL)">
+            <span class="dot" style="background:linear-gradient(135deg,#e3e3e3 50%,#a65c21 50%)"></span>Original MTL</button>
+          <button type="button" aria-pressed="false" data-color="1,0.65,0.05" data-rough="0.18">
             <span class="dot" style="background:#f2c14e"></span>Brushed Gold</button>
           <button type="button" aria-pressed="false" data-color="0.85,0.48,0.38" data-rough="0.22">
             <span class="dot" style="background:#e8b4a0"></span>Rose Gold</button>
@@ -386,6 +388,10 @@
       if (event.key === 'Escape') closeCallouts();
     });
 
+    // Snapshot of each imported material, taken just before the first metal swatch overwrites them, so
+    // "Original MTL" can undo it. (Taken lazily: the model can finish loading before this script runs.)
+    let originalMaterials = null;
+
     const actions = {
       camera(btn) {
         viewer.autoRotate = false;
@@ -393,14 +399,38 @@
         viewer.fieldOfView = btn.dataset.fov;
       },
       material(btn) {
-        const material = viewer.model?.materials[0];
-        if (!material) return;
-        const pbr = material.pbrMetallicRoughness;
-        pbr.setBaseColorFactor([...btn.dataset.color.split(',').map(Number), 1]);
-        pbr.setMetallicFactor(1);
-        pbr.setRoughnessFactor(Number(btn.dataset.rough));
-        viewer.querySelector('[data-live="material"]').textContent = btn.textContent.trim();
-        viewer.querySelector('[data-live="roughness"]').textContent = Number(btn.dataset.rough).toFixed(2);
+        const materials = viewer.model?.materials;
+        if (!materials) return;
+        const live = key => viewer.querySelector(`[data-live="${key}"]`);
+        if ('original' in btn.dataset) {
+          if (!originalMaterials) return;  // nothing has been changed yet
+          // Restore every slot to the values it was imported with.
+          materials.forEach((material, i) => {
+            const pbr = material.pbrMetallicRoughness;
+            pbr.setBaseColorFactor(originalMaterials[i].color);
+            pbr.setMetallicFactor(originalMaterials[i].metallic);
+            pbr.setRoughnessFactor(originalMaterials[i].roughness);
+          });
+          live('material').textContent = btn.dataset.label;
+          live('roughness').textContent = live('metallic').textContent = 'Per material';
+          return;
+        }
+        originalMaterials ??= materials.map(({ pbrMetallicRoughness: pbr }) => ({
+          color: [...pbr.baseColorFactor],
+          metallic: pbr.metallicFactor,
+          roughness: pbr.roughnessFactor,
+        }));
+        const color = [...btn.dataset.color.split(',').map(Number), 1];
+        const roughness = Number(btn.dataset.rough);
+        materials.forEach(material => {
+          const pbr = material.pbrMetallicRoughness;
+          pbr.setBaseColorFactor(color);
+          pbr.setMetallicFactor(1);
+          pbr.setRoughnessFactor(roughness);
+        });
+        live('material').textContent = btn.textContent.trim();
+        live('roughness').textContent = roughness.toFixed(2);
+        live('metallic').textContent = '1.00';
       },
       environment(btn) {
         viewer.environmentImage = btn.dataset.env;
