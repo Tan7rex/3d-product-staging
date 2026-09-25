@@ -1,6 +1,6 @@
 """Build the gold-sphere studio scene from scratch and save gold_sphere_studio.blend.
 
-Run: blender -b --python generate_scene.py
+Run: blender -b --python generate_scene.py [-- --lighting-rig {warm_accent,high_key_commercial}]
 """
 import math
 
@@ -46,18 +46,42 @@ FLAG_SIZE = (2.0, 5.0)  # width, height (m)
 FLAG_COLOR = (0.01, 0.01, 0.01)
 FLAG_ROUGHNESS = 0.9
 
-# High-contrast strip light for long metallic highlights
-STRIP_LIGHT_NAME = 'Studio_Strip_Light'
-STRIP_LIGHT_ENERGY = 2500.0
-STRIP_LIGHT_SIZE = (0.3, 6.0)
-STRIP_LIGHT_LOCATION = (-4.0, -3.0, 5.0)
-
 # World ambient fill
 WORLD_COLOR = (0.8, 0.8, 0.8)
 WORLD_STRENGTH = 0.45
 # Glossy visibility stays ON: with it off, reflection rays that reach the world return
 # black, which is exactly what darkened the top of the metallic sphere.
 WORLD_GLOSSY_VISIBLE = True
+
+# Lighting rigs. Every light gets a TRACK_TO at the rig target (Gold_Sphere here, Camera_Focus_Target when
+# staging). A rig also owns the ambient world, the sweep colour and whether the black flags render.
+# light: (name, type, energy W, colour, location, size | (size_x, size_y) | None for point lights)
+LIGHTING_RIGS = {
+    # Warm accent: white key disk + strip light for long metallic highlights + warm rim backlight (+Y, behind).
+    'warm_accent': {
+        'lights': [
+            ('Studio_Key_Light', 'AREA', 1500.0, (1.0, 1.0, 1.0), (4.0, -4.0, 7.0), 6.0),
+            ('Studio_Strip_Light', 'AREA', 2500.0, (1.0, 1.0, 1.0), (-4.0, -3.0, 5.0), (0.3, 6.0)),
+            ('WarmRimLight', 'POINT', 1200.0, (1.0, 0.6, 0.3), (2.2, 4.0, 3.5), None),
+        ],
+        'world': (WORLD_COLOR, WORLD_STRENGTH),
+        'backdrop': BACKDROP_COLOR,
+        'flags': True,
+    },
+    # High-key commercial: big overhead softbox and two broad neutral fills, bright sweep and world, no black
+    # flags. Large sources close in keep contact shadows faint and the product evenly lit.
+    'high_key_commercial': {
+        'lights': [
+            ('HighKey_Top_Softbox', 'AREA', 1400.0, (1.0, 1.0, 1.0), (0.0, -0.5, 6.0), (5.0, 5.0)),
+            ('HighKey_Fill_L', 'AREA', 450.0, (1.0, 1.0, 1.0), (-5.0, -4.0, 2.5), (3.0, 5.0)),
+            ('HighKey_Fill_R', 'AREA', 450.0, (1.0, 1.0, 1.0), (5.0, -4.0, 2.5), (3.0, 5.0)),
+        ],
+        'world': ((1.0, 1.0, 1.0), 0.7),
+        'backdrop': (0.85, 0.85, 0.85),
+        'flags': False,
+    },
+}
+DEFAULT_LIGHTING_RIG = 'warm_accent'
 
 
 def clear_scene():
@@ -164,34 +188,56 @@ def add_contrast_flags():
     return flags
 
 
-def add_key_light():
-    light = bpy.data.lights.new('Studio_Key_Light', 'AREA')
-    light.shape = 'DISK'
-    light.size = 6.0
-    light.energy = 1500.0
-    ob = bpy.data.objects.new('Studio_Key_Light', light)
+def add_light(name, light_type, energy, color, location, size, target):
+    light = bpy.data.lights.new(name, light_type)
+    light.energy = energy
+    light.color = color
+    if light_type == 'AREA':
+        if isinstance(size, tuple):
+            light.shape = 'RECTANGLE'
+            light.size, light.size_y = size
+        else:
+            light.shape = 'DISK'
+            light.size = size
+    ob = bpy.data.objects.new(name, light)
     bpy.context.scene.collection.objects.link(ob)
-    ob.location = (4.0, -4.0, 7.0)
+    ob.location = location
     track = ob.constraints.new('TRACK_TO')
-    track.target = bpy.data.objects['Gold_Sphere']
+    track.target = target
     track.track_axis = 'TRACK_NEGATIVE_Z'
     track.up_axis = 'UP_Y'
     return ob
 
 
-def add_strip_light():
-    light = bpy.data.lights.new(STRIP_LIGHT_NAME, 'AREA')
-    light.shape = 'RECTANGLE'
-    light.size, light.size_y = STRIP_LIGHT_SIZE
-    light.energy = STRIP_LIGHT_ENERGY
-    ob = bpy.data.objects.new(STRIP_LIGHT_NAME, light)
-    bpy.context.scene.collection.objects.link(ob)
-    ob.location = STRIP_LIGHT_LOCATION
-    track = ob.constraints.new('TRACK_TO')
-    track.target = bpy.data.objects['Gold_Sphere']
-    track.track_axis = 'TRACK_NEGATIVE_Z'
-    track.up_axis = 'UP_Y'
-    return ob
+def apply_lighting_rig(rig, target):
+    """Replace every light in the file with the named rig, all tracking target; set its world, sweep and flags."""
+    if rig not in LIGHTING_RIGS:
+        raise ValueError(f'unknown lighting rig {rig!r}; expected one of {sorted(LIGHTING_RIGS)}')
+    spec = LIGHTING_RIGS[rig]
+    for ob in [ob for ob in bpy.data.objects if ob.type == 'LIGHT']:
+        data = ob.data
+        bpy.data.objects.remove(ob, do_unlink=True)
+        if data.users == 0:
+            bpy.data.lights.remove(data)
+    lights = [add_light(*light, target) for light in spec['lights']]
+
+    world = bpy.context.scene.world
+    if world is not None and world.node_tree is not None:
+        color, strength = spec['world']
+        bg = world.node_tree.nodes.get('Background')
+        bg.inputs['Color'].default_value = (*color, 1.0)
+        bg.inputs['Strength'].default_value = strength
+        world.color = color
+    sweep = bpy.data.materials.get('Sweep_Matte_Gray')
+    if sweep is not None:
+        sweep.node_tree.nodes.get('Principled BSDF').inputs['Base Color'].default_value = (*spec['backdrop'], 1.0)
+        sweep.diffuse_color = (*spec['backdrop'], 1.0)
+    for name in FLAG_NAMES:
+        flag = bpy.data.objects.get(name)
+        if flag is not None:
+            flag.hide_render = not spec['flags']
+    print(f"[RIG] {rig}: {', '.join(ob.name for ob in lights)} -> TRACK_TO {target.name}", flush=True)
+    return lights
 
 
 def _fcurves(ob):
@@ -259,14 +305,13 @@ def setup_world():
     return world
 
 
-def main():
+def main(lighting_rig=DEFAULT_LIGHTING_RIG):
     clear_scene()
     sphere = add_gold_sphere()
     add_backdrop()
     add_contrast_flags()
-    add_key_light()
-    add_strip_light()
     setup_world()
+    apply_lighting_rig(lighting_rig, sphere)
     add_fixed_camera(sphere)
     animate_product_rotation(sphere)
     scene = bpy.context.scene
@@ -279,4 +324,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(prog='generate_scene.py')
+    parser.add_argument('--lighting-rig', default=DEFAULT_LIGHTING_RIG, choices=sorted(LIGHTING_RIGS))
+    main(parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []).lighting_rig)

@@ -5,10 +5,12 @@ imported model: joined into one 'Product' mesh, normalised to a 2 m bounding box
 turntable axis with its bottom flush on the floor (Z = 0) and spun 0 -> 360 deg over frames 1..120.
 The camera tracks a Camera_Focus_Target empty at the product's vertical midpoint and keeps its elevation
 and heading, but its distance scales with the product's bounding radius (relative to the sphere's, clamped
-to 0.5-2x). Light constraints that targeted the sphere are re-linked to the product.
+to 0.5-2x). The studio lights are replaced by the chosen --lighting-rig (generate_scene.LIGHTING_RIGS), every
+light tracking Camera_Focus_Target. After the MP4, the product is exported as one static GLB per
+MATERIAL_VARIANTS entry to Renders/Material_Variants/Product_<variant>.glb.
 
 Run:  blender -b --python-exit-code 1 --python staging_template.py -- <model.(obj|fbx|stl|gltf|glb)> [output_name]
-          [--up-axis {+Y,-Y,+X,-X,+Z,-Z}]
+          [--up-axis {+Y,-Y,+X,-X,+Z,-Z}] [--lighting-rig {warm_accent,high_key_commercial}]
 --up-axis names the axis that points up in the source file; the product is rotated so it points up +Z before
 it is measured and seated (e.g. '+Y' for Maya/Unity FBX exports that arrive lying on their back).
 With no model path it only checks that the environment is ready (dry run) and renders nothing.
@@ -26,7 +28,9 @@ for path in (user_site, site.getusersitepackages()):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+import json
 import math
+import struct
 import bpy
 import mathutils
 import subprocess
@@ -38,9 +42,19 @@ BASE_DIR = r"C:\Users\HI\OneDrive\Desktop\Blender"
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from generate_scene import animate_product_rotation, FRAME_START, FRAME_END  # 1..120, linear loop
+from generate_scene import apply_lighting_rig, LIGHTING_RIGS, DEFAULT_LIGHTING_RIG
 
 BLEND_FILE = os.path.join(BASE_DIR, "gold_sphere_studio.blend")
 RENDERS_DIR = os.path.join(BASE_DIR, "Renders")
+VARIANTS_DIR = os.path.join(RENDERS_DIR, "Material_Variants")
+# GLB material variants: name -> (linear base colour, roughness, anisotropy). Colours/roughness match the web
+# viewer's material buttons; brushed finishes carry anisotropy (exported as KHR_materials_anisotropy).
+MATERIAL_VARIANTS = {
+    "Brushed_Gold": ((1.0, 0.65, 0.05), 0.18, 0.8),
+    "Rose_Gold": ((0.85, 0.48, 0.38), 0.22, 0.6),
+    "Dark_Titanium": ((0.11, 0.11, 0.12), 0.35, 0.7),
+    "Polish_Chrome": ((0.97, 0.97, 0.97), 0.02, 0.0),
+}
 PLACEHOLDER_NAME = "Gold_Sphere"
 FALLBACK_MATERIAL = "PBR_Gold"  # studio gold, given to meshes that import with no material
 TARGET_SIZE = 2.0  # m, longest bounding-box side after normalisation
@@ -311,13 +325,71 @@ def encode_mp4(frames_dir, output_mp4):
     log(f"encoded {output_mp4} ({os.path.getsize(output_mp4) / 2**20:.2f} MB, {n_frames} frames, {secs:.2f}s)")
 
 
-def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis="+Z"):
+def variant_material(name, color, roughness, anisotropy):
+    mat = bpy.data.materials.new(f"Product_{name}")
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (*color, 1.0)
+    bsdf.inputs["Metallic"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = roughness
+    bsdf.inputs["Anisotropic"].default_value = anisotropy
+    mat.diffuse_color = (*color, 1.0)
+    return mat
+
+
+def read_glb_json(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    magic, _, _, json_len, chunk_type = struct.unpack("<4sIIII", data[:20])
+    if magic != b"glTF" or chunk_type != 0x4E4F534A:  # 'JSON'
+        raise RuntimeError(f"{path} is not a GLB")
+    return json.loads(data[20:20 + json_len])
+
+
+def export_material_variants(product):
+    """Export the product once per MATERIAL_VARIANTS entry (every slot gets the variant) as a static GLB in
+    VARIANTS_DIR, then read each file back and check its material. Runs after the render, so the turntable
+    keeps the product's own materials."""
+    os.makedirs(VARIANTS_DIR, exist_ok=True)
+    bpy.context.scene.frame_set(FRAME_START)  # rotation 0
+    select_only([product], product)
+    if not product.material_slots:
+        product.data.materials.append(None)
+    paths = []
+    for name, (color, roughness, anisotropy) in MATERIAL_VARIANTS.items():
+        mat = variant_material(name, color, roughness, anisotropy)
+        for slot in product.material_slots:
+            slot.material = mat
+        path = os.path.join(VARIANTS_DIR, f"Product_{name}.glb")
+        bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True,
+                                  export_animations=False)
+        gltf = read_glb_json(path)
+        exported = [m for m in gltf.get("materials", []) if m.get("name") == mat.name]
+        if not exported:
+            raise RuntimeError(f"{path}: material {mat.name!r} missing")
+        pbr = exported[0].get("pbrMetallicRoughness", {})
+        base = pbr.get("baseColorFactor", [1, 1, 1, 1])[:3]
+        if any(abs(a - b) > 1e-3 for a, b in zip(base, color)) or \
+                abs(pbr.get("roughnessFactor", 1.0) - roughness) > 1e-3:
+            raise RuntimeError(f"{path}: exported {base} / roughness {pbr.get('roughnessFactor')} "
+                               f"!= {color} / {roughness}")
+        aniso = exported[0].get("extensions", {}).get("KHR_materials_anisotropy")
+        log(f"exported {path} ({os.path.getsize(path) / 2**20:.2f} MB): base {tuple(round(v, 3) for v in base)}, "
+            f"roughness {roughness}, anisotropy {round(aniso.get('anisotropyStrength', 1.0), 3) if aniso else 'none'}")
+        paths.append(path)
+    return paths
+
+
+def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis="+Z",
+                         lighting_rig=DEFAULT_LIGHTING_RIG):
     if up_axis not in UP_AXIS_ROTATIONS:
         raise ValueError(f"unsupported up axis {up_axis!r}; expected one of {sorted(UP_AXIS_ROTATIONS)}")
+    if lighting_rig not in LIGHTING_RIGS:
+        raise ValueError(f"unknown lighting rig {lighting_rig!r}; expected one of {sorted(LIGHTING_RIGS)}")
     t0 = time.perf_counter()
     frames_dir = os.path.join(RENDERS_DIR, f"{output_name}_Frames")
     output_mp4 = os.path.join(RENDERS_DIR, f"{output_name}_Turntable_360.mp4")
-    log(f"staging {import_file_path} as {output_name!r} (up axis {up_axis})")
+    log(f"staging {import_file_path} as {output_name!r} (up axis {up_axis}, lighting rig {lighting_rig})")
 
     load_studio()
     product = import_model(import_file_path)
@@ -326,6 +398,7 @@ def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis
     radius = bounding_radius(product, z_center)
     ref_center, ref_radius = reference_framing()  # before Gold_Sphere is removed
     focus = add_focus_target(z_center)
+    apply_lighting_rig(lighting_rig, focus)  # rebuilds every light, aimed at the focus target
     relink_constraints(product, focus)
     aim_camera(focus, radius, ref_center, ref_radius)
     remove_placeholder()
@@ -343,6 +416,7 @@ def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis
     finally:
         shutil.rmtree(frames_dir, ignore_errors=True)
         log(f"purged {frames_dir}")
+    export_material_variants(product)
     log(f"done in {(time.perf_counter() - t0) / 60:.1f} min -> {output_mp4}")
     return output_mp4
 
@@ -373,6 +447,8 @@ if __name__ == "__main__":
     parser.add_argument("output_name", nargs="?", default="Custom_Product")
     parser.add_argument("--up-axis", default="+Z", choices=sorted(UP_AXIS_ROTATIONS),
                         help="axis pointing up in the source file (default +Z, no correction)")
+    parser.add_argument("--lighting-rig", default=DEFAULT_LIGHTING_RIG, choices=sorted(LIGHTING_RIGS),
+                        help=f"studio lighting preset (default {DEFAULT_LIGHTING_RIG})")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     # argparse reads a separate '-Y'/'-X' as a flag, so fold '--up-axis -Y' into '--up-axis=-Y'.
     if "--up-axis" in argv and argv.index("--up-axis") + 1 < len(argv):
@@ -380,6 +456,6 @@ if __name__ == "__main__":
         argv[i:i + 2] = [f"--up-axis={argv[i + 1]}"]
     args = parser.parse_args(argv)
     if args.model:
-        run_staging_pipeline(args.model, args.output_name, args.up_axis)
+        run_staging_pipeline(args.model, args.output_name, args.up_axis, args.lighting_rig)
     else:
         dry_check()
