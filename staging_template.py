@@ -7,10 +7,12 @@ The camera tracks a Camera_Focus_Target empty at the product's vertical midpoint
 and heading, but its distance scales with the product's bounding radius (relative to the sphere's, clamped
 to 0.5-2x). The studio lights are replaced by the chosen --lighting-rig (generate_scene.LIGHTING_RIGS), every
 light tracking Camera_Focus_Target. After the MP4, the product is exported as one static GLB per
-MATERIAL_VARIANTS entry to Renders/Material_Variants/Product_<variant>.glb.
+MATERIAL_VARIANTS entry to Renders/Material_Variants/Product_<variant>.glb. With --preserve-materials the
+imported material slots (e.g. an OBJ's .mtl) are kept as-is, no PBR_Gold fallback or metallic variant is
+applied, and a single GLB with the native materials is exported to Renders/<output_name>_Interactive.glb.
 
 Run:  blender -b --python-exit-code 1 --python staging_template.py -- <model.(obj|fbx|stl|gltf|glb)> [output_name]
-          [--up-axis {+Y,-Y,+X,-X,+Z,-Z}] [--lighting-rig {warm_accent,high_key_commercial}]
+          [--up-axis {+Y,-Y,+X,-X,+Z,-Z}] [--lighting-rig {warm_accent,high_key_commercial}] [--preserve-materials]
 --up-axis names the axis that points up in the source file; the product is rotated so it points up +Z before
 it is measured and seated (e.g. '+Y' for Maya/Unity FBX exports that arrive lying on their back).
 With no model path it only checks that the environment is ready (dry run) and renders nothing.
@@ -119,8 +121,11 @@ def remove_placeholder():
     log(f"removed {PLACEHOLDER_NAME}")
 
 
-def import_model(path):
-    """Import, bake modifiers/pose into plain meshes, drop helper objects, join into one 'Product' mesh."""
+def import_model(path, preserve_materials=False):
+    """Import, bake modifiers/pose into plain meshes, drop helper objects, join into one 'Product' mesh.
+
+    OBJ imports read the sibling .mtl, and joining keeps every material slot. Meshes that arrive with no
+    material get FALLBACK_MATERIAL unless preserve_materials is set."""
     ext = os.path.splitext(path)[1].lower()
     if ext not in IMPORTERS:
         raise ValueError(f"unsupported format {ext!r}; expected one of {sorted(IMPORTERS)}")
@@ -133,7 +138,9 @@ def import_model(path):
     meshes = [ob for ob in new if ob.type == 'MESH']
     if not meshes:
         raise RuntimeError(f"{path} contains no mesh objects")
-    log(f"imported {os.path.basename(path)}: {len(new)} objects, {len(meshes)} meshes")
+    materials = {slot.material.name for ob in meshes for slot in ob.material_slots if slot.material}
+    log(f"imported {os.path.basename(path)}: {len(new)} objects, {len(meshes)} meshes, "
+        f"{len(materials)} materials {sorted(materials)}")
 
     # Convert applies modifiers and armature poses; parent_clear keeps each mesh's world placement
     # once the empties/armatures/cameras/lights that came with the file are removed.
@@ -151,7 +158,9 @@ def import_model(path):
     product.name = "Product"
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
-    if not any(slot.material for slot in product.material_slots):
+    if preserve_materials:
+        log(f"preserving {len(product.material_slots)} imported material slots")
+    elif not any(slot.material for slot in product.material_slots):
         fallback = bpy.data.materials.get(FALLBACK_MATERIAL)
         if fallback is not None:
             product.data.materials.clear()
@@ -380,8 +389,21 @@ def export_material_variants(product):
     return paths
 
 
+def export_native_glb(product, path):
+    """Export the product with its imported materials as one static GLB and check they all made it."""
+    bpy.context.scene.frame_set(FRAME_START)  # rotation 0
+    select_only([product], product)
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True, export_animations=False)
+    expected = {slot.material.name for slot in product.material_slots if slot.material}
+    exported = {m.get("name") for m in read_glb_json(path).get("materials", [])}
+    if expected - exported:
+        raise RuntimeError(f"{path}: materials missing from export: {sorted(expected - exported)}")
+    log(f"exported {path} ({os.path.getsize(path) / 2**20:.2f} MB) with native materials {sorted(exported)}")
+    return path
+
+
 def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis="+Z",
-                         lighting_rig=DEFAULT_LIGHTING_RIG):
+                         lighting_rig=DEFAULT_LIGHTING_RIG, preserve_materials=False):
     if up_axis not in UP_AXIS_ROTATIONS:
         raise ValueError(f"unsupported up axis {up_axis!r}; expected one of {sorted(UP_AXIS_ROTATIONS)}")
     if lighting_rig not in LIGHTING_RIGS:
@@ -389,10 +411,11 @@ def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis
     t0 = time.perf_counter()
     frames_dir = os.path.join(RENDERS_DIR, f"{output_name}_Frames")
     output_mp4 = os.path.join(RENDERS_DIR, f"{output_name}_Turntable_360.mp4")
-    log(f"staging {import_file_path} as {output_name!r} (up axis {up_axis}, lighting rig {lighting_rig})")
+    log(f"staging {import_file_path} as {output_name!r} (up axis {up_axis}, lighting rig {lighting_rig}, "
+        f"{'native' if preserve_materials else 'studio'} materials)")
 
     load_studio()
-    product = import_model(import_file_path)
+    product = import_model(import_file_path, preserve_materials)
     correct_up_axis(product, up_axis)
     z_center = normalize(product)
     radius = bounding_radius(product, z_center)
@@ -416,7 +439,10 @@ def run_staging_pipeline(import_file_path, output_name="Custom_Product", up_axis
     finally:
         shutil.rmtree(frames_dir, ignore_errors=True)
         log(f"purged {frames_dir}")
-    export_material_variants(product)
+    if preserve_materials:
+        export_native_glb(product, os.path.join(RENDERS_DIR, f"{output_name}_Interactive.glb"))
+    else:
+        export_material_variants(product)
     log(f"done in {(time.perf_counter() - t0) / 60:.1f} min -> {output_mp4}")
     return output_mp4
 
@@ -449,6 +475,9 @@ if __name__ == "__main__":
                         help="axis pointing up in the source file (default +Z, no correction)")
     parser.add_argument("--lighting-rig", default=DEFAULT_LIGHTING_RIG, choices=sorted(LIGHTING_RIGS),
                         help=f"studio lighting preset (default {DEFAULT_LIGHTING_RIG})")
+    parser.add_argument("--preserve-materials", action="store_true",
+                        help="keep the imported materials and export one native-material GLB instead of the "
+                             "metallic variants")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     # argparse reads a separate '-Y'/'-X' as a flag, so fold '--up-axis -Y' into '--up-axis=-Y'.
     if "--up-axis" in argv and argv.index("--up-axis") + 1 < len(argv):
@@ -456,6 +485,7 @@ if __name__ == "__main__":
         argv[i:i + 2] = [f"--up-axis={argv[i + 1]}"]
     args = parser.parse_args(argv)
     if args.model:
-        run_staging_pipeline(args.model, args.output_name, args.up_axis, args.lighting_rig)
+        run_staging_pipeline(args.model, args.output_name, args.up_axis, args.lighting_rig,
+                             args.preserve_materials)
     else:
         dry_check()
